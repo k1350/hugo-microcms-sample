@@ -1,0 +1,83 @@
+{{ $limit := 100 }}
+{{ $endpoint := "https://PUT_YOUR_SERVICE_ID.microcms.io/api/v1/PUT_YOUR_ARTICLE_ENDPOINT_NAME" }}
+{{ $opts := dict
+  "headers" (dict "X-MICROCMS-API-KEY" "PUT_YOUR_API_KEY")
+}}
+
+{{ $dataList := slice }}
+
+{{/* 無限ループを作る構文が無いので十分大きなループ回数で代用 */}}
+{{ range seq 0 1999 }}
+  {{ $offset := math.Mul $limit . }}
+  {{ $data := dict }}
+  {{ $url := print $endpoint "?orders=createdAt&limit=" $limit "&offset=" $offset }}
+
+  {{ with resources.GetRemote $url $opts }}
+    {{ with .Err }}
+      {{ errorf "Unable to get remote resource %s: %s" $url . }}
+    {{ else }}
+      {{ $data = . | transform.Unmarshal }}
+      {{ $dataList = $dataList | append $data }}
+    {{ end }}
+  {{ else }}
+    {{ errorf "Unable to get remote resource %s" $url }}
+  {{ end }}
+
+  {{ if lt (len $data.contents) $limit }}
+    {{ break }}
+  {{ end }}
+{{ end }}
+
+{{/* 記事追加 */}}
+{{ range $dataList }}
+
+  {{ range .contents }}
+
+    {{ $articlePath := .id }}
+    {{ $title := .title }}
+
+    {{/* https://gohugo.io/content-management/content-adapters/#page-map に従って整形 */}}
+    {{ $content := dict "mediaType" "text/html" "value" .content }}
+
+    {{ $dates := dict "date" (time.AsTime .publishedAt) "lastmod" (time.AsTime .revisedAt) }}
+
+    {{/* タグ名の配列でないと taxonomy として認識されないので配列にする */}}
+    {{ $tags := slice }}
+    {{ range .tags }}
+      {{ $tags = $tags | append .name}}
+    {{ end }}
+    
+    {{ $params := dict "id" .id "title" .title "tags" $tags }}
+    {{ $page := dict
+      "content" $content
+      "dates" $dates
+      "kind" "page"
+      "params" $params
+      "path" $articlePath
+      "title" $title
+    }}
+    {{ $.AddPage $page }}
+
+    {{/* coverImage があれば Page Resource にタイトル背景画像を保存する */}}
+    {{ with $url := .coverImage.url }}
+      {{ with resources.GetRemote $url }}
+        {{ with .Err }}
+          {{ errorf "Unable to get remote resource %s: %s" $url . }}
+        {{ else }}
+          {{ $content := dict "mediaType" .MediaType.Type "value" .Content }}
+          {{ $params := dict "alt" $title }}
+          {{ $resource := dict
+            "content" $content
+            "params" $params
+            "path" (printf "%s/featured_image.%s" $articlePath .MediaType.SubType)
+          }}
+          {{ $.AddResource $resource }}
+        {{ end }}
+      {{ else }}
+        {{ errorf "Unable to get remote resource %s" $url }}
+      {{ end }}
+    {{ end }}
+
+  {{ end }}
+
+{{ end }}
